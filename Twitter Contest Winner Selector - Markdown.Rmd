@@ -1,0 +1,102 @@
+---
+title: "Twitter Contest Winner Selector Tool"
+author: "Michael Hutchinson"
+date: "2022-08-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Twitter Giveaway Random Selection Tool
+
+This is a simple script to randomly select users who liked or retweeted a tweet.
+In my case, I needed a way to select people for a golf book giveaway.
+
+This method relies on [Phantombuster](https://phantombuster.com/automations/twitter/8886/twitter-likes-export) to cleanly pull everyone who liked or retweeted a tweet. Phantombuster is a paid service but does allow you to do a 14-day free trial, and seems like it has a ton of useful features. 
+
+Ideally though I would do this with directly with an R package like twitteR or rtweet, but neither seems to have a function built to accomplish this yet.
+
+The data is available via the API, so a person with some time could probably figure it out  after doing a little research [here](https://developer.twitter.com/en/docs/twitter-api/tweets/likes/introduction).
+
+Anyway, here's the code and output of our random selection tool.
+
+```{r libraries, message = FALSE}
+# Load libraries
+# Probably don't need all these. 
+# Everything beyond "gt" is just for displaying the winners 
+# in a visually appealing way
+library(tidyverse)
+library(DT)
+
+
+```
+
+## Step 1: Pull in Data, Clean, and Weight Likes vs. Retweets
+
+The code below first pulls in our saved .csv's and combines them. With the Twitter API you can hit rate limits and if you have a big audience, probably need to run it multiple times. I ended up with two .csv's with some significant overlap, so my next step was to dedupe. 
+
+I had to make a choice here and decide whether a user that both liked and retweeted should be considered twice. Ultimately I went with 'yes', but may reconsider down the line.
+
+I then wanted a way to weight how much value to give to a like vs. a retweet. Since a retweet is a more involved engagement, I decided to give those people a bit of an edge.
+
+I did this by first calculating the % of actions that were likes or retweets. As it turned out, there were 2.41 likes for every retweet. Or, told differently, about 70% of total engagements were likes, vs. 30% for retweets.
+
+I then inverted the percentages to provide a weighting for each engagement type. Those values get fed into the sampling / selection in the next step.
+
+```{r data_manipulation, warning = FALSE, message = FALSE}
+entrants <- read_csv("tweet_likers_and_retweeters.csv") %>% 
+  rbind(read_csv("tweet_likers_and_retweeters_2.csv")) %>% 
+  rbind(read_csv("tweet_likers_and_retweeters_3.csv")) %>% 
+  select(screenName, action) %>% 
+  distinct() %>%
+  mutate(total_actions = n()) %>%
+  group_by(action) %>%
+  mutate(action_count = n(),
+         inverse_percentage = (1 - (action_count / total_actions))) %>%
+  ungroup()
+
+head(entrants)
+```
+## Step 2: Choose Winners!
+
+Now the fun part, we choose our winners. For this one we're going to give away 4 books, and we're using the `slice_sample()` function to randomly select our winners. Here we pass in that inverse percentage value to the `weight by` argument to give those RT's that bump.
+
+But before revealing the winners, there's one other thing we should do. 
+
+```{r winners}
+winners <- entrants %>% 
+  slice_sample(n = 4, weight_by = inverse_percentage) %>% 
+  select("Winners" = screenName) # Weight to more heavily favor RTs
+```
+
+## Step 3: Select Alternates
+
+There's a chance we end up selecting some people who either have the books or don't need them. For instance, I'm pretty sure Adam Young and Jon Sherman don't need copies of each others' books. In that case we want a couple of alternates. Here's how we get them.
+
+```{r}
+usernames_to_exclude <- as.array(winners$Winners)
+
+alternates <- entrants %>% 
+  # Remove winners
+  filter(!screenName %in% usernames_to_exclude) %>% 
+  slice_sample(n = 4, weight_by = inverse_percentage) %>% 
+  select("Alternates" = screenName)
+
+```
+
+## Step 4: Display the lucky entrants!
+
+Okay, let's see who won! We'll use the `DT` package to make it look better than just 
+```{r}
+# Combine into a single dataframe
+df <- data.frame(c(winners, alternates))
+
+# Display
+datatable(df, class = 'cell-border stripe')
+
+
+```
+
+
